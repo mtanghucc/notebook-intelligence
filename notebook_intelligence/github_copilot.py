@@ -85,6 +85,9 @@ def login_with_existing_credentials(access_token_config=None):
         token = result.stdout.strip()
         if token:
             github_access_token_provided = token
+            login()
+            log.info("Access token loaded from gh auth")
+            return
     except Exception as e:
         log.error(f"gh auth token not available: {e}")
 
