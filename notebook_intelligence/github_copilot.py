@@ -8,16 +8,18 @@ import threading
 import time
 import uuid
 import requests
-# Additional imports if needed:
-# from notebook_intelligence.api import CancelToken, ChatResponse, CompletionContext, MarkdownData
-# from ._version import __version__ as NBI_VERSION
 
+from notebook_intelligence.api import CancelToken, ChatResponse, CompletionContext, MarkdownData
+
+from ._version import __version__ as NBI_VERSION
+
+# Logger setup
 log = logging.getLogger(__name__)
 
-# Define an enum for login statuses
+# Define login status enum
 LoginStatus = enum.Enum('LoginStatus', ['NOT_LOGGED_IN', 'ACTIVATING_DEVICE', 'LOGGING_IN', 'LOGGED_IN'])
 
-NBI_VERSION = "1.0.0"  # Example version; replace with your actual version value.
+# Global constants and variables
 EDITOR_VERSION = f"NotebookIntelligence/{NBI_VERSION}"
 EDITOR_PLUGIN_VERSION = f"NotebookIntelligence/{NBI_VERSION}"
 USER_AGENT = f"NotebookIntelligence/{NBI_VERSION}"
@@ -44,17 +46,35 @@ github_auth = {
     "token_expires_at": dt.datetime.now()
 }
 
+# Globals for legacy keyring support
+github_access_token_provided = None
+remember_github_access_token = False
+
 stop_requested = False
 get_access_code_thread = None
 get_token_thread = None
 last_token_fetch_time = dt.datetime.now() - dt.timedelta(seconds=TOKEN_FETCH_INTERVAL)
 
-# -------------------------------------------------------------------
-# New helper function to get token via gh auth.
+
+def get_login_status():
+    """
+    Returns the current login status.
+    If the device flow is active, includes verification_uri and user_code.
+    """
+    global github_auth
+    response = {"status": github_auth["status"].name}
+    if github_auth["status"] == LoginStatus.ACTIVATING_DEVICE:
+        response.update({
+            "verification_uri": github_auth["verification_uri"],
+            "user_code": github_auth["user_code"]
+        })
+    return response
+
+
 def get_gh_auth_token():
     """
-    Attempt to retrieve a GitHub token using the GitHub CLI.
-    If the user has already logged in via `gh auth login`, this function returns the token.
+    Attempt to retrieve a GitHub token using the GitHub CLI (gh auth).
+    Returns the token if found; otherwise, returns None.
     """
     try:
         result = subprocess.run(
@@ -66,63 +86,92 @@ def get_gh_auth_token():
         )
         token = result.stdout.strip()
         if token:
-            log.info("Found gh auth token.")
+            log.info("Found gh auth token via GitHub CLI.")
             return token
     except Exception as e:
         log.error(f"Failed to retrieve gh auth token: {e}")
     return None
 
-# -------------------------------------------------------------------
-# Refactored login function
+
+def login_with_existing_credentials(access_token_config=None):
+    """
+    Legacy support for existing credentials.
+    If access_token_config is 'remember' or None, attempts to retrieve the token from keyring.
+    If 'forget' is passed, deletes the stored token.
+    Otherwise, if a token is provided directly, it is used.
+    Finally, login() is called which now also tries gh auth.
+    """
+    global github_access_token_provided, remember_github_access_token, github_auth
+
+    if github_auth["status"] is not LoginStatus.NOT_LOGGED_IN:
+        return
+
+    if access_token_config == "remember" or access_token_config is None:
+        try:
+            import keyring
+            github_access_token_provided = keyring.get_password(KEYRING_SERVICE_NAME, GITHUB_ACCESS_TOKEN_KEYRING_NAME)
+        except Exception as e:
+            if access_token_config == "remember":
+                log.error(f"Failed to get GitHub access token from keyring: {e}")
+        remember_github_access_token = (access_token_config == "remember")
+    elif access_token_config == "forget":
+        try:
+            import keyring
+            keyring.delete_password(KEYRING_SERVICE_NAME, GITHUB_ACCESS_TOKEN_KEYRING_NAME)
+        except Exception as e:
+            log.error(f"Failed to forget GitHub access token from keyring: {e}")
+    elif access_token_config is not None:
+        github_access_token_provided = access_token_config
+
+    if github_access_token_provided is not None:
+        login()
+
+
+def store_github_access_token(access_token):
+    """
+    Stores the GitHub access token in keyring if the 'remember' option was used.
+    """
+    if remember_github_access_token:
+        try:
+            import keyring
+            keyring.set_password(KEYRING_SERVICE_NAME, GITHUB_ACCESS_TOKEN_KEYRING_NAME, access_token)
+        except Exception as e:
+            log.error(f"Failed to store GitHub access token in keyring: {e}")
+
+
 def login():
     """
-    Login attempts to use the GitHub CLI token first.
-    If that fails, it falls back to the device verification flow.
+    Main login function.
+    First tries to retrieve a token using gh auth.
+    If that fails, and if a token from keyring is available, it uses that.
+    Otherwise, falls back to the device verification flow.
+    Once a token is obtained, get_token() is called to retrieve the Copilot token.
     """
+    global github_access_token_provided, github_auth
+
+    # Try gh auth token first.
     gh_token = get_gh_auth_token()
+    if not gh_token and github_access_token_provided:
+        gh_token = github_access_token_provided
+        log.info("Using token from legacy credentials.")
     if gh_token:
-        log.info("Using token from gh auth; user is authenticated via GitHub CLI.")
+        log.info("User authenticated via GitHub CLI or keyring.")
         github_auth["access_token"] = gh_token
         github_auth["status"] = LoginStatus.LOGGING_IN
-        # Retrieve the internal Copilot token using the provided gh auth token.
         get_token()
         return {"status": github_auth["status"].name}
     else:
-        # Fallback: Start device code flow
+        # Fall back to device code flow.
         login_info = get_device_verification_info()
         if login_info is not None:
             wait_for_tokens()
         return login_info
 
-def login_with_existing_credentials(access_token_config=None):
-    """
-    Legacy support for existing credentials via keyring or provided token.
-    This function still works if the caller provides an access token directly,
-    but gh auth is attempted first in login().
-    """
-    global github_auth
-
-    if github_auth["status"] is not LoginStatus.NOT_LOGGED_IN:
-        return
-
-    # Existing keyring or provided token support (if needed)
-    if access_token_config is not None:
-        # If a token is directly provided, use it.
-        github_auth["access_token"] = access_token_config
-    # Call login() which now first attempts gh auth.
-    login()
-
-def store_github_access_token(access_token):
-    """
-    Optionally store the token using keyring if desired.
-    """
-    try:
-        import keyring
-        keyring.set_password(KEYRING_SERVICE_NAME, GITHUB_ACCESS_TOKEN_KEYRING_NAME, access_token)
-    except Exception as e:
-        log.error(f"Failed to store GitHub access token: {e}")
 
 def logout():
+    """
+    Logs the user out by resetting all authentication state.
+    """
     global github_auth
     github_auth.update({
         "verification_uri": None,
@@ -134,13 +183,19 @@ def logout():
     })
     return {"status": github_auth["status"].name}
 
+
 def handle_stop_request():
+    """
+    Sets a flag to request termination of background token fetching threads.
+    """
     global stop_requested
     stop_requested = True
 
+
 def get_device_verification_info():
     """
-    Fallback to the device flow when gh auth is not set up.
+    Initiates the device verification flow.
+    Returns a dictionary containing the verification URI and user code.
     """
     global github_auth
     data = {
@@ -169,19 +224,18 @@ def get_device_verification_info():
         log.error(f"Failed to get device verification info: {e}")
         return None
 
-    # Instruct the user to visit the verification URI and enter the user code.
     return {
         "verification_uri": github_auth["verification_uri"],
         "user_code": github_auth["user_code"]
     }
 
+
 def wait_for_user_access_token_thread_func():
     """
-    Thread function to poll for an access token via the device flow.
-    If a token is already available (e.g. provided by gh auth), this exits immediately.
+    Thread function that polls for the access token using the device flow.
+    If a token is already available (e.g. from gh auth or keyring), it exits immediately.
     """
     global github_auth, get_access_code_thread
-    # If the token is already set (e.g. via gh auth) exit early.
     if github_auth["access_token"]:
         log.info("Using existing GitHub access token; skipping device polling.")
         get_access_code_thread = None
@@ -221,6 +275,7 @@ def wait_for_user_access_token_thread_func():
             log.error(f"Failed to get access token from device flow: {e}")
         time.sleep(ACCESS_TOKEN_THREAD_SLEEP_INTERVAL)
 
+
 def get_token():
     """
     Uses the acquired GitHub access token to request a Copilot-specific token.
@@ -243,6 +298,7 @@ def get_token():
         )
         resp_json = resp.json()
         if resp.status_code == 401:
+            # Token no longer valid; restart authentication.
             github_auth["access_token"] = None
             logout()
             wait_for_tokens()
@@ -269,9 +325,10 @@ def get_token():
     except Exception as e:
         log.error(f"Failed to get token from GitHub Copilot: {e}")
 
+
 def get_token_thread_func():
     """
-    Thread function to periodically refresh the Copilot token.
+    Thread function that periodically refreshes the Copilot token.
     """
     global github_auth, get_token_thread, last_token_fetch_time
     while True:
@@ -279,7 +336,7 @@ def get_token_thread_func():
             get_token_thread = None
             return
         token = github_auth["token"]
-        # Update token if it is expired or about to expire.
+        # Refresh token if it is expired or about to expire.
         if github_auth["access_token"] is not None and (token is None or (dt.datetime.now() - github_auth["token_expires_at"]).total_seconds() > -10):
             if (dt.datetime.now() - last_token_fetch_time).total_seconds() > TOKEN_FETCH_INTERVAL:
                 log.info("Refreshing GitHub token")
@@ -287,9 +344,10 @@ def get_token_thread_func():
                 last_token_fetch_time = dt.datetime.now()
         time.sleep(TOKEN_THREAD_SLEEP_INTERVAL)
 
+
 def wait_for_tokens():
     """
-    Starts the threads for waiting for the access token and refreshing the Copilot token.
+    Starts the threads for waiting for the access token and for token refreshing.
     """
     global get_access_code_thread, get_token_thread
     if get_access_code_thread is None:
@@ -299,9 +357,10 @@ def wait_for_tokens():
         get_token_thread = threading.Thread(target=get_token_thread_func)
         get_token_thread.start()
 
+
 def generate_copilot_headers():
     """
-    Generate headers for calling GitHub Copilot endpoints.
+    Generates headers for GitHub Copilot API requests.
     """
     token = github_auth.get('token')
     return {
@@ -318,7 +377,11 @@ def generate_copilot_headers():
         'vscode-machineid': MACHINE_ID,
     }
 
+
 def inline_completions(model_id, prefix, suffix, language, filename, context, cancel_token) -> str:
+    """
+    Retrieves inline completions using the Copilot API.
+    """
     token = github_auth.get('token')
     prompt = f"# Path: {filename}"
     if cancel_token.is_cancel_requested:
@@ -368,7 +431,12 @@ def inline_completions(model_id, prefix, suffix, language, filename, context, ca
                 result += completion
     return result
 
+
 def completions(model_id, messages, tools=None, response=None, cancel_token=None, options: dict = {}) -> any:
+    """
+    Retrieves chat completions from the Copilot API.
+    Supports streaming responses if a response handler is provided.
+    """
     stream = response is not None
     try:
         data = {
