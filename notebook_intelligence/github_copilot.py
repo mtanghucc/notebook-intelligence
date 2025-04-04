@@ -74,18 +74,18 @@ def login_with_existing_credentials(access_token_config=None):
         return
 
     try:
-        result = subprocess.run(
-            ["gh", "auth", "token"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=True
-        )
-        token = result.stdout.strip()
-        if token:
-            github_access_token_provided = get_gh_auth_token()
+        result = subprocess.run(
+            ["gh", "auth", "token"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True
+        )
+        token = result.stdout.strip()
+        if token:
+            github_access_token_provided = get_gh_auth_token()
     except Exception as e:
-        log.error(f"gh auth token not available: {e}")
+        log.error(f"gh auth token not available: {e}")
 
     if access_token_config == "remember" or access_token_config is None and github_access_token_provided is None:
         try:
