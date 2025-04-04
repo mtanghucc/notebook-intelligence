@@ -91,7 +91,7 @@ def login_with_existing_credentials(access_token_config=None):
     except Exception as e:
         log.error(f"gh auth token not available: {e}")
 
-    if access_token_config == "remember" or access_token_config is None and github_access_token_provided is None:
+    if access_token_config == "remember" or access_token_config is None:
         try:
             import keyring
             github_access_token_provided = keyring.get_password(KEYRING_SERVICE_NAME, GITHUB_ACCESS_TOKEN_KEYRING_NAME)
