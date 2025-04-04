@@ -310,6 +310,8 @@ def wait_for_tokens():
 def generate_copilot_headers():
     global github_auth
     token = github_auth.get('token')
+    ## test
+    log.info(f'LOGGING TOKEN: {token}')
     return {
         'authorization': f'Bearer {token}',
         'editor-version': EDITOR_VERSION,
@@ -407,12 +409,17 @@ def completions(model_id, messages, tools=None, response=None, cancel_token=None
         if cancel_token is not None and cancel_token.is_cancel_requested:
             response.finish()
             
+        ## test
+        headers=generate_copilot_headers()
+        log.info(f'LOGGING AUTHORIZATION: {headers['authorization']}')
+            
         request = requests.post(
             f"{API_ENDPOINT}/chat/completions",
             headers=generate_copilot_headers(),
             json=data,
             stream=stream
         )
+        
         
         if request.status_code != 200:
             msg = f"Failed to get completions from GitHub Copilot: [{request.status_code}]: {request.text}"
