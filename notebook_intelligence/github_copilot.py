@@ -1,4 +1,9 @@
 import datetime as dt
+from dataclasses import dataclass
+from typing import Any
+from pathlib import Path
+import secrets
+import sseclient
 import enum
 import json
 import logging
@@ -13,13 +18,10 @@ from notebook_intelligence.api import CancelToken, ChatResponse, CompletionConte
 
 from ._version import __version__ as NBI_VERSION
 
-# Logger setup
 log = logging.getLogger(__name__)
 
-# Define login status enum
 LoginStatus = enum.Enum('LoginStatus', ['NOT_LOGGED_IN', 'ACTIVATING_DEVICE', 'LOGGING_IN', 'LOGGED_IN'])
 
-# Global constants and variables
 EDITOR_VERSION = f"NotebookIntelligence/{NBI_VERSION}"
 EDITOR_PLUGIN_VERSION = f"NotebookIntelligence/{NBI_VERSION}"
 USER_AGENT = f"NotebookIntelligence/{NBI_VERSION}"
@@ -53,17 +55,15 @@ remember_github_access_token = False
 stop_requested = False
 get_access_code_thread = None
 get_token_thread = None
-last_token_fetch_time = dt.datetime.now() - dt.timedelta(seconds=TOKEN_FETCH_INTERVAL)
+last_token_fetch_time = dt.datetime.now() + dt.timedelta(seconds=-TOKEN_FETCH_INTERVAL)
 
 
 def get_login_status():
-    """
-    Returns the current login status.
-    If the device flow is active, includes verification_uri and user_code.
-    """
     global github_auth
-    response = {"status": github_auth["status"].name}
-    if github_auth["status"] == LoginStatus.ACTIVATING_DEVICE:
+    response = {
+        "status": github_auth["status"].name
+    }
+    if github_auth["status"] is LoginStatus.ACTIVATING_DEVICE:
         response.update({
             "verification_uri": github_auth["verification_uri"],
             "user_code": github_auth["user_code"]
@@ -94,13 +94,6 @@ def get_gh_auth_token():
 
 
 def login_with_existing_credentials(access_token_config=None):
-    """
-    Legacy support for existing credentials.
-    If access_token_config is 'remember' or None, attempts to retrieve the token from keyring.
-    If 'forget' is passed, deletes the stored token.
-    Otherwise, if a token is provided directly, it is used.
-    Finally, login() is called which now also tries gh auth.
-    """
     global github_access_token_provided, remember_github_access_token, github_auth
 
     if github_auth["status"] is not LoginStatus.NOT_LOGGED_IN:
@@ -128,9 +121,6 @@ def login_with_existing_credentials(access_token_config=None):
 
 
 def store_github_access_token(access_token):
-    """
-    Stores the GitHub access token in keyring if the 'remember' option was used.
-    """
     if remember_github_access_token:
         try:
             import keyring
@@ -140,13 +130,6 @@ def store_github_access_token(access_token):
 
 
 def login():
-    """
-    Main login function.
-    First tries to retrieve a token using gh auth.
-    If that fails, and if a token from keyring is available, it uses that.
-    Otherwise, falls back to the device verification flow.
-    Once a token is obtained, get_token() is called to retrieve the Copilot token.
-    """
     global github_access_token_provided, github_auth
 
     # Try gh auth token first.
@@ -169,9 +152,6 @@ def login():
 
 
 def logout():
-    """
-    Logs the user out by resetting all authentication state.
-    """
     global github_auth
     github_auth.update({
         "verification_uri": None,
@@ -181,22 +161,17 @@ def logout():
         "status": LoginStatus.NOT_LOGGED_IN,
         "token": None
     })
-    return {"status": github_auth["status"].name}
+    return {
+        "status": github_auth["status"].name
+    }
 
 
 def handle_stop_request():
-    """
-    Sets a flag to request termination of background token fetching threads.
-    """
     global stop_requested
     stop_requested = True
 
 
 def get_device_verification_info():
-    """
-    Initiates the device verification flow.
-    Returns a dictionary containing the verification URI and user code.
-    """
     global github_auth
     data = {
         "client_id": CLIENT_ID,
@@ -215,6 +190,7 @@ def get_device_verification_info():
             },
             data=json.dumps(data)
         )
+        
         resp_json = resp.json()
         github_auth["verification_uri"] = resp_json.get('verification_uri')
         github_auth["user_code"] = resp_json.get('user_code')
@@ -231,10 +207,6 @@ def get_device_verification_info():
 
 
 def wait_for_user_access_token_thread_func():
-    """
-    Thread function that polls for the access token using the device flow.
-    If a token is already available (e.g. from gh auth or keyring), it exits immediately.
-    """
     global github_auth, get_access_code_thread
     if github_auth["access_token"]:
         log.info("Using existing GitHub access token; skipping device polling.")
@@ -277,9 +249,6 @@ def wait_for_user_access_token_thread_func():
 
 
 def get_token():
-    """
-    Uses the acquired GitHub access token to request a Copilot-specific token.
-    """
     global github_auth, API_ENDPOINT, PROXY_ENDPOINT, TOKEN_REFRESH_INTERVAL
     access_token = github_auth["access_token"]
     if access_token is None:
@@ -327,9 +296,6 @@ def get_token():
 
 
 def get_token_thread_func():
-    """
-    Thread function that periodically refreshes the Copilot token.
-    """
     global github_auth, get_token_thread, last_token_fetch_time
     while True:
         if stop_requested or github_auth["status"] == LoginStatus.NOT_LOGGED_IN:
@@ -346,22 +312,18 @@ def get_token_thread_func():
 
 
 def wait_for_tokens():
-    """
-    Starts the threads for waiting for the access token and for token refreshing.
-    """
     global get_access_code_thread, get_token_thread
     if get_access_code_thread is None:
         get_access_code_thread = threading.Thread(target=wait_for_user_access_token_thread_func)
         get_access_code_thread.start()
+        
     if get_token_thread is None:
         get_token_thread = threading.Thread(target=get_token_thread_func)
         get_token_thread.start()
 
 
 def generate_copilot_headers():
-    """
-    Generates headers for GitHub Copilot API requests.
-    """
+    global github_auth
     token = github_auth.get('token')
     return {
         'authorization': f'Bearer {token}',
@@ -379,18 +341,20 @@ def generate_copilot_headers():
 
 
 def inline_completions(model_id, prefix, suffix, language, filename, context, cancel_token) -> str:
-    """
-    Retrieves inline completions using the Copilot API.
-    """
+    global github_auth
     token = github_auth.get('token')
     prompt = f"# Path: {filename}"
+    
     if cancel_token.is_cancel_requested:
         return ''
+        
     if context is not None:
         for item in context.items:
             context_file = f"Compare this snippet from {item.filePath if item.filePath is not None else 'undefined'}:{NL}{item.content}{NL}"
             prompt += "\n# " + "\n# ".join(context_file.split('\n'))
+            
     prompt += f"{NL}{prefix}"
+    
     try:
         if cancel_token.is_cancel_requested:
             return ''
@@ -418,10 +382,14 @@ def inline_completions(model_id, prefix, suffix, language, filename, context, ca
     except Exception as e:
         log.error(f"Failed to get inline completions: {e}")
         return ''
+        
     if cancel_token.is_cancel_requested:
         return ''
+        
     result = ''
+    
     decoded_response = resp.content.decode()
+    
     resp_text = decoded_response.split('\n')
     for line in resp_text:
         if line.startswith('data: {'):
@@ -433,10 +401,6 @@ def inline_completions(model_id, prefix, suffix, language, filename, context, ca
 
 
 def completions(model_id, messages, tools=None, response=None, cancel_token=None, options: dict = {}) -> any:
-    """
-    Retrieves chat completions from the Copilot API.
-    Supports streaming responses if a response handler is provided.
-    """
     stream = response is not None
     try:
         data = {
@@ -451,23 +415,27 @@ def completions(model_id, messages, tools=None, response=None, cancel_token=None
             'nwo': 'NotebookIntelligence',
             'stream': stream
         }
+        
         if 'tool_choice' in options:
             data['tool_choice'] = options['tool_choice']
+            
         if cancel_token is not None and cancel_token.is_cancel_requested:
             response.finish()
+            
         request = requests.post(
             f"{API_ENDPOINT}/chat/completions",
             headers=generate_copilot_headers(),
             json=data,
             stream=stream
         )
+        
         if request.status_code != 200:
             msg = f"Failed to get completions from GitHub Copilot: [{request.status_code}]: {request.text}"
             log.error(msg)
-            if response:
-                response.stream(msg)
-                response.finish()
+            response.stream(MarkdownData(msg))
+            response.finish()
             raise Exception(msg)
+            
         if stream:
             import sseclient
             client = sseclient.SSEClient(request)
