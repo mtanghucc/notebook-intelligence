@@ -411,7 +411,7 @@ def completions(model_id, messages, tools=None, response=None, cancel_token=None
             
         ## test
         headers=generate_copilot_headers()
-        log.info(f'LOGGING AUTHORIZATION: {headers['authorization']}')
+        log.info(f'LOGGING AUTHORIZATION: {headers["authorization"]}')
             
         request = requests.post(
             f"{API_ENDPOINT}/chat/completions",
