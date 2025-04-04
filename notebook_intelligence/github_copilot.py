@@ -74,6 +74,7 @@ def login_with_existing_credentials(access_token_config=None):
         return
 
     try:
+        import subprocess
         result = subprocess.run(
             ["gh", "auth", "token"],
             stdout=subprocess.PIPE,
