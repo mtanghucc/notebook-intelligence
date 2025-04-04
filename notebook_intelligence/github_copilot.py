@@ -130,25 +130,10 @@ def store_github_access_token(access_token):
 
 
 def login():
-    global github_access_token_provided, github_auth
-
-    # Try gh auth token first.
-    gh_token = get_gh_auth_token()
-    if not gh_token and github_access_token_provided:
-        gh_token = github_access_token_provided
-        log.info("Using token from legacy credentials.")
-    if gh_token:
-        log.info("User authenticated via GitHub CLI or keyring.")
-        github_auth["access_token"] = gh_token
-        github_auth["status"] = LoginStatus.LOGGING_IN
-        get_token()
-        return {"status": github_auth["status"].name}
-    else:
-        # Fall back to device code flow.
-        login_info = get_device_verification_info()
-        if login_info is not None:
-            wait_for_tokens()
-        return login_info
+    login_info = get_device_verification_info()
+    if login_info is not None:
+        wait_for_tokens()
+    return login_info
 
 
 def logout():
@@ -454,3 +439,11 @@ def completions(model_id, messages, tools=None, response=None, cancel_token=None
     except Exception as e:
         log.error(f"Failed to get completions from GitHub Copilot: {e}")
         raise e
+
+gh_token = get_gh_auth_token()
+if gh_token:
+    log.info("Auto-authenticated via GitHub CLI; starting in authenticated state.")
+    github_auth["access_token"] = gh_token
+    github_auth["status"] = LoginStatus.LOGGING_IN
+
+    get_token()
